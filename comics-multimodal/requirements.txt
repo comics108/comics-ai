@@ -1,0 +1,10 @@
+Pillow>=10.0
+opencv-python>=4.8
+numpy>=1.26
+torch>=2.9
+torchvision>=0.20
+scikit-learn>=1.4
+scikit-image>=0.22
+pytest>=7.0
+pytesseract>=0.3.10
+rapidfuzz>=3.0
