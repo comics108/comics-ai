@@ -1,0 +1,7 @@
+Pillow>=10.0
+pytesseract>=0.3.10
+rapidfuzz>=3.0
+opencv-python>=4.8
+numpy>=1.26
+playwright>=1.40
+pytest>=7.0
