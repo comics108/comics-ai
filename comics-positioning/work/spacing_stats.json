@@ -1,0 +1,35 @@
+{
+  "canvas_width": 1080,
+  "height_by_kind": {
+    "background": {
+      "count": 203,
+      "median": 2096,
+      "p25": 1337,
+      "p75": 3140
+    },
+    "art": {
+      "count": 2683,
+      "median": 565,
+      "p25": 274,
+      "p75": 1089
+    },
+    "character": {
+      "count": 868,
+      "median": 716.0,
+      "p25": 466,
+      "p75": 1093
+    },
+    "balloon": {
+      "count": 825,
+      "median": 271,
+      "p25": 200,
+      "p75": 364
+    }
+  },
+  "gap": {
+    "count": 4552,
+    "median": -356.0,
+    "p25": -816,
+    "p75": -113
+  }
+}
