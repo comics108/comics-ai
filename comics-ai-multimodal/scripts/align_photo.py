@@ -52,7 +52,7 @@ BALOONS_OCR_JSONL = baloons_bridge.BALOONS_APP_DIR / "work" / "ocr.jsonl"
 # matching), which compares two comparably-sized strings and is a poor fit when one side is a
 # whole page's worth of concatenated dialogue.
 PARTIAL_MATCH_THRESHOLD = 80.0
-MIN_CONFIDENT_PHRASES = 2  # one lucky short-phrase hit isn't enough to trust a page->episode match
+MIN_CONFIDENT_PHRASES = 2  # a page with >=2 confident hits for one episode is trusted outright
 MIN_PHRASE_LENGTH = 12  # normalized chars; found via real-data verification (2026-07-31): short
 # generic corpus phrases ("NO", "NO.") trivially partial_ratio-match almost any OCR'd page text by
 # substring containment -- a real photo matched 5/5 "confident" hits that were all just "NO"/"NO."
@@ -60,6 +60,18 @@ MIN_PHRASE_LENGTH = 12  # normalized chars; found via real-data verification (20
 # substring-containment-seeking by design, which is exactly why very short candidates are
 # dangerous with it (unlike comics-ai-baloons' token_sort_ratio, which naturally penalizes length
 # mismatch). ~9% of the real OCR corpus (149/1650 entries) is shorter than this cutoff.
+MARGIN_FOR_SINGLE_HIT = 10.0  # confidence points. A page with exactly 1 confident hit used to be
+# rejected outright regardless of context (flows/sdd-comics-ai-positioning's original design).
+# Real-data investigation (2026-08-01, flows/sdd-comics-ai-transformations/02-specifications.md)
+# re-ran real OCR+matching on all 24 real "1 confident hit" pages in the dataset: 21/24 had no
+# competing episode at all and were real, trustworthy matches (e.g. a 98.0-score hit on an
+# otherwise-garbled page -- the rest of the page just didn't happen to contain a second corpus
+# phrase). Only 3/24 had a second episode also at 1 hit -- genuinely ambiguous. A >=10-point score
+# margin over the best competing episode's hit cleanly separated the 22 recoverable cases (21 with
+# no competitor + 1 with a 13-point margin) from the 2 truly ambiguous ones (2.9 and 7.5-point
+# margins) in that real sample. This does not relax MIN_CONFIDENT_PHRASES itself -- a >=2-hit match
+# is still trusted outright, unconditionally -- it only recovers single-hit pages that have no real
+# competing claim.
 
 
 @dataclass
@@ -110,19 +122,38 @@ def match_page_to_episode(
     if not hits_by_episode:
         return None, [], 0.0, "no balloon phrase matched confidently"
 
-    best_episode = max(hits_by_episode, key=lambda ep: len(hits_by_episode[ep]))
-    hits = hits_by_episode[best_episode]
-    if len(hits) < MIN_CONFIDENT_PHRASES:
+    max_hit_count = max(len(hits) for hits in hits_by_episode.values())
+
+    if max_hit_count >= MIN_CONFIDENT_PHRASES:
+        best_episode = max(hits_by_episode, key=lambda ep: len(hits_by_episode[ep]))
+        hits = hits_by_episode[best_episode]
+        layer_indexes = sorted({idx for idx, _ in hits})
+        confidence = sum(score for _, score in hits) / len(hits) / 100.0
+        return best_episode, layer_indexes, confidence, ""
+
+    # max_hit_count == 1 here for every episode present (an episode only enters hits_by_episode on
+    # a real hit, so 0 is impossible) -- see MARGIN_FOR_SINGLE_HIT's docstring for the real-data
+    # justification of what follows.
+    ranked = sorted(
+        ((ep, hits[0][1]) for ep, hits in hits_by_episode.items()),
+        key=lambda pair: -pair[1],
+    )
+    top_episode, top_score = ranked[0]
+    runner_up_score = ranked[1][1] if len(ranked) > 1 else None
+
+    if runner_up_score is not None and (top_score - runner_up_score) < MARGIN_FOR_SINGLE_HIT:
         return (
             None,
             [],
             0.0,
-            f"only {len(hits)} confident phrase hit(s) (need >= {MIN_CONFIDENT_PHRASES})",
+            f"only 1 confident phrase hit each for {len(ranked)} competing episodes, "
+            f"top margin {top_score - runner_up_score:.1f} < {MARGIN_FOR_SINGLE_HIT}",
         )
 
+    hits = hits_by_episode[top_episode]
     layer_indexes = sorted({idx for idx, _ in hits})
-    confidence = sum(score for _, score in hits) / len(hits) / 100.0
-    return best_episode, layer_indexes, confidence, ""
+    confidence = hits[0][1] / 100.0
+    return top_episode, layer_indexes, confidence, ""
 
 
 def ground_truth_cluster_for(

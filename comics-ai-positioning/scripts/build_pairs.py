@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 from collections import defaultdict
 from pathlib import Path
 
@@ -46,6 +47,62 @@ def _sort_top_to_bottom(regions: list[dict], bbox_key: str = "bbox") -> list[dic
     return sorted(regions, key=lambda r: (r[bbox_key][1], r[bbox_key][0]))
 
 
+def _cluster_into_rows(regions: list[dict], bbox_key: str = "bbox") -> list[list[dict]]:
+    """Groups regions into visual rows by Y-center proximity. Tolerance is half the page's own
+    MEDIAN region height (one robust value per page), not each pair's own height -- real
+    `regions.jsonl` content spans a huge size range within one page (confirmed: a single photo's
+    page had regions from 9px to 245px tall out of a 256px-tall crop, since these are fine-grained
+    content segments -- one balloon, one character silhouette -- not uniform panel-sized boxes). An
+    earlier version used a per-pair adaptive tolerance (half of the *taller of the two* regions'
+    own height); one oversized region (e.g. a near-full-page background) inflated its own local
+    tolerance enough to wrongly absorb distant, unrelated regions into its row. A single
+    page-median-based tolerance is not vulnerable to that specific failure mode."""
+    if not regions:
+        return []
+
+    def y_center(r: dict) -> float:
+        y0, y1 = r[bbox_key][1], r[bbox_key][3]
+        return (y0 + y1) / 2
+
+    def height(r: dict) -> float:
+        return r[bbox_key][3] - r[bbox_key][1]
+
+    tolerance = statistics.median(height(r) for r in regions) / 2
+
+    ordered = sorted(regions, key=y_center)
+    rows: list[list[dict]] = [[ordered[0]]]
+    row_y_centers = [y_center(ordered[0])]
+    for r in ordered[1:]:
+        if abs(y_center(r) - row_y_centers[-1]) <= tolerance:
+            rows[-1].append(r)
+            row_y_centers[-1] = sum(y_center(x) for x in rows[-1]) / len(rows[-1])
+        else:
+            rows.append([r])
+            row_y_centers.append(y_center(r))
+    return rows
+
+
+def _sort_reading_order(regions: list[dict], bbox_key: str = "bbox") -> list[dict]:
+    """Raster reading order for a source page: row-cluster by Y-proximity, then sort each row
+    left-to-right by X. Correctly handles a real multi-panel-per-row page (verified against a
+    synthetic 3x3 grid, see test_build_pairs.py) where the naive (y, x)-tuple sort interleaves
+    rows since it only breaks ties on *exact* Y equality.
+
+    **NOT currently wired into build_pairs_for_row (2026-08-01)**: a real held-out-episode A/B test
+    against `_sort_top_to_bottom` showed this makes the actual positioning-accuracy metric *worse*
+    on this dataset (weighted mean error 1467px -> 1641-1665px; rank correlation 0.542 -> 0.39-0.48),
+    despite being geometrically more correct for the source page's true layout. Kept here, tested,
+    and documented as a real negative result -- not deleted -- in case future work (larger held-out
+    sample, or a narrative-order cross-check from `sdd-comics-ai-script-context`) can resolve *why*
+    it underperforms rather than just that it does. See
+    flows/sdd-comics-ai-positioning/04-implementation-log.md for the full experiment record."""
+    rows = _cluster_into_rows(regions, bbox_key)
+    result: list[dict] = []
+    for row in rows:
+        result.extend(sorted(row, key=lambda r: r[bbox_key][0]))
+    return result
+
+
 def _group_by_kind(regions: list[dict], kind_key: str) -> dict[str, list[dict]]:
     groups: dict[str, list[dict]] = defaultdict(list)
     for r in regions:
@@ -69,6 +126,21 @@ def build_pairs_for_row(
     if not ground_truth:
         return []
 
+    # Source page (photo) space: naive (y, x) sort, kept deliberately despite a real, disclosed
+    # theoretical flaw -- see _sort_reading_order below. Investigated 2026-08-01 (Anton asked how
+    # reading order should work for a real multi-panel-per-row page): built and tested a real
+    # row-clustering replacement (_sort_reading_order/_cluster_into_rows), confirmed correct on a
+    # synthetic 3x3-grid case the naive sort gets wrong. But on a real held-out-episode A/B test
+    # (same protocol as the Phase 5 learned-model comparison), row-clustering made the actual
+    # evaluation metric *worse*, not better: weighted mean error rose from 1467px to 1641-1665px
+    # (two tolerance variants tried), and reading-order rank correlation dropped from 0.542 to
+    # 0.39-0.48. Diagnosed likely cause: real `regions.jsonl` content spans a huge size range
+    # within one page (9-245px tall out of a 256px crop, since these are fine-grained content
+    # segments -- one balloon, one character silhouette -- not uniform panel-sized boxes), which
+    # defeats simple Y-proximity row-clustering more than expected. Per this flow's own established
+    # precedent (ship what wins, not what sounds better -- same standard applied to the Phase 5
+    # learned model), the naive sort stays the shipped default. Full record:
+    # flows/sdd-comics-ai-positioning/_status.md and 04-implementation-log.md.
     predicted_sorted = _sort_top_to_bottom(predicted, "bbox")
     # global reading order across the whole page, before splitting by kind
     reading_order = {id(r): i for i, r in enumerate(predicted_sorted)}

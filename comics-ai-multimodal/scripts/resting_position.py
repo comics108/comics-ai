@@ -68,6 +68,67 @@ def _last_by_start(entries: list[dict]) -> dict | None:
     return sorted(entries, key=lambda a: a.get("start", 0))[-1]
 
 
+@dataclass
+class PropertyReveal:
+    start: int
+    end: int
+    from_value: dict
+    to_value: dict
+
+
+@dataclass
+class RevealAnimation:
+    translate: PropertyReveal | None = None
+    scale: PropertyReveal | None = None
+    rotate: PropertyReveal | None = None
+    alpha: PropertyReveal | None = None
+
+    def is_empty(self) -> bool:
+        return not any((self.translate, self.scale, self.rotate, self.alpha))
+
+
+_TYPE_FIELDS = {
+    "TranslateAnim": ("x", "y"),
+    "ScaleAnim": ("scaleX", "scaleY", "pivotX", "pivotY"),
+    "RotateAnim": ("angle", "pivotX", "pivotY"),
+    "AlphaAnim": ("alpha",),
+}
+
+
+def _property_reveal(entries: list[dict], fields: tuple[str, ...]) -> PropertyReveal | None:
+    """A real reveal animation for one property type is exactly the "2+ keyframes" case (flows/
+    sdd-comics-ai-transformations/02-specifications.md, verified against a real file: a static base
+    entry with no start/end, plus a keyframed entry with a real (start, end) scroll-range). Only 1
+    entry means the property is static for this layer -- not a reveal, per
+    `resolve_resting_transform`'s own established reading of the same data. 3+ entries (multi-step
+    animation) are approximated by first-vs-last, same simplification `resolve_resting_transform`
+    already makes for the resting value -- a disclosed limitation, not silently exact."""
+    if len(entries) < 2:
+        return None
+    ordered = sorted(entries, key=lambda a: a.get("start", 0))
+    first, last = ordered[0], ordered[-1]
+    return PropertyReveal(
+        start=last.get("start", 0),
+        end=last.get("end", 0),
+        from_value={f: first.get(f, 0) for f in fields},
+        to_value={f: last.get(f, 0) for f in fields},
+    )
+
+
+def resolve_reveal_animation(animations: list[dict]) -> RevealAnimation:
+    """Extracts which properties (if any) have a real keyframed reveal, and their (start, end,
+    from, to) -- the training target for `sdd-comics-ai-transformations`' transformation-generation
+    baseline. Complements `resolve_resting_transform` (the settled end-state) rather than
+    duplicating it -- this answers "does it animate, and how", not "where does it end up"."""
+    groups = _group_by_type(animations)
+    return RevealAnimation(
+        translate=_property_reveal(groups.get("TranslateAnim", []), _TYPE_FIELDS["TranslateAnim"]),
+        scale=_property_reveal(groups.get("ScaleAnim", []), _TYPE_FIELDS["ScaleAnim"]),
+        rotate=_property_reveal(groups.get("RotateAnim", []), _TYPE_FIELDS["RotateAnim"]),
+        alpha=_property_reveal(groups.get("AlphaAnim", []), _TYPE_FIELDS["AlphaAnim"]),
+    )
+
+
 def resolve_resting_transform(animations: list[dict]) -> RestingTransform:
     result = RestingTransform()
     groups = _group_by_type(animations)

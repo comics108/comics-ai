@@ -40,12 +40,46 @@ def test_match_page_to_episode_finds_confident_multi_phrase_match():
     assert reason == ""
 
 
-def test_match_page_to_episode_requires_minimum_confident_phrases():
+def test_match_page_to_episode_accepts_single_confident_hit_when_no_competitor():
+    # Real-data finding (2026-08-01, flows/sdd-comics-ai-transformations/02-specifications.md):
+    # a single confident hit with no competing episode is a trustworthy match (21/24 real pages
+    # investigated), not something to reject outright just because it's the only hit on the page.
     corpus = [_corpus_entry("ep1.comics", 10, "a fairly distinctive phrase here")]
     page_text = "a fairly distinctive phrase here and nothing else matches"
     episode, layer_indexes, confidence, reason = ap.match_page_to_episode(page_text, corpus)
+    assert episode == "ep1.comics"
+    assert layer_indexes == [10]
+    assert reason == ""
+
+
+def test_match_page_to_episode_rejects_ambiguous_single_hit_tie():
+    # Real-data finding: when 2+ episodes each have exactly 1 hit at a near-identical score
+    # (margin < MARGIN_FOR_SINGLE_HIT), that's genuinely ambiguous (3/24 real pages found this way)
+    # -- must not guess between them.
+    corpus = [
+        _corpus_entry("ep1.comics", 10, "bhishma gangeya this very regent of hastinapur"),
+        _corpus_entry("ep2.comics", 20, "bhishma gangeya this very regent of hastinapore"),
+    ]
+    page_text = "bhishma gangeya - the regent of hastinapura?"
+    episode, layer_indexes, confidence, reason = ap.match_page_to_episode(page_text, corpus)
     assert episode is None
-    assert "1 confident phrase hit" in reason
+    assert "competing episodes" in reason
+
+
+def test_match_page_to_episode_accepts_single_hit_with_clear_margin_over_competitor():
+    # A weaker competing single-hit episode (score well below the top one) must not block an
+    # otherwise-clean, high-confidence match -- the margin rule only rejects genuine ties.
+    corpus = [
+        _corpus_entry("ep1.comics", 10, "this phrase matches almost perfectly right here for real"),
+        _corpus_entry("ep2.comics", 20, "this phrase matches almost badly right here"),
+    ]
+    page_text = (
+        "some ocr noise this phrase matches almost perfectly right here for real "
+        "more junk around it 123"
+    )
+    episode, layer_indexes, confidence, reason = ap.match_page_to_episode(page_text, corpus)
+    assert episode == "ep1.comics"
+    assert reason == ""
 
 
 def test_match_page_to_episode_no_ocr_text():

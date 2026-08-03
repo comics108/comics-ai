@@ -120,15 +120,69 @@ def test_out_of_order_start_values_are_sorted_not_trusted_as_array_order():
     assert t.x == 999  # the one with the later start wins, regardless of array position
 
 
+def test_reveal_animation_extracts_coordinated_translate_and_alpha_crossfade():
+    # Real fixture (CROSSFADE_ANIMS): 2 TranslateAnim + 2 AlphaAnim entries -> both are real
+    # keyframed reveals, no ScaleAnim/RotateAnim at all -> both None.
+    r = rp.resolve_reveal_animation(CROSSFADE_ANIMS)
+    assert r.translate == rp.PropertyReveal(
+        start=0, end=2361, from_value={"x": 0, "y": 498}, to_value={"x": 134, "y": -165}
+    )
+    assert r.alpha == rp.PropertyReveal(
+        start=0, end=446, from_value={"alpha": 0.2}, to_value={"alpha": 1.0}
+    )
+    assert r.scale is None
+    assert r.rotate is None
+
+
+def test_reveal_animation_single_keyframe_translate_is_not_a_reveal():
+    # ROTATE_ANIMS has only 1 TranslateAnim entry -- static, not animated.
+    r = rp.resolve_reveal_animation(ROTATE_ANIMS)
+    assert r.translate is None
+    assert r.alpha == rp.PropertyReveal(
+        start=2766, end=3876, from_value={"alpha": 0}, to_value={"alpha": 1.0}
+    )
+    assert r.rotate == rp.PropertyReveal(
+        start=3209,
+        end=3601,
+        from_value={"angle": 0, "pivotX": 0.5, "pivotY": 0.5},
+        to_value={"angle": 3.0, "pivotX": 0.5, "pivotY": 0.5},
+    )
+
+
+def test_reveal_animation_no_alpha_entries_at_all_is_not_a_reveal():
+    # SCALE_ANIMS has zero AlphaAnim entries -- no fade, correctly not a reveal (distinct from
+    # "1 entry", which is also not a reveal, but for a different reason -- both yield None).
+    r = rp.resolve_reveal_animation(SCALE_ANIMS)
+    assert r.alpha is None
+    assert r.translate is None  # only 1 TranslateAnim entry
+    assert r.scale == rp.PropertyReveal(
+        start=7103,
+        end=8311,
+        from_value={"scaleX": 1.0, "scaleY": 1.0, "pivotX": 0.5, "pivotY": 0.5},
+        to_value={"scaleX": 1.08, "scaleY": 1.08, "pivotX": 0.5, "pivotY": 0.5},
+    )
+
+
+def test_reveal_animation_empty_list_is_empty():
+    r = rp.resolve_reveal_animation([])
+    assert r.is_empty()
+
+
 def test_resolves_without_crashing_across_all_real_dataset_layers():
     # Integration smoke test: every real layer's animations[] parses without error and produces
     # a RestingTransform (values not asserted here -- just no crashes/exceptions across all 4594
     # layers in the real dataset).
     count = 0
+    reveal_count = 0
     for f in baloons_bridge.find_comics_files():
         archive = baloons_bridge.ComicsArchive(f)
         data = archive.read_data_json()
         for layer in data["layers"]:
-            rp.resolve_resting_transform(layer.get("animations", []))
+            anims = layer.get("animations", [])
+            rp.resolve_resting_transform(anims)
+            reveal = rp.resolve_reveal_animation(anims)
+            if not reveal.is_empty():
+                reveal_count += 1
             count += 1
     assert count == 4594
+    assert reveal_count > 0  # real reveal animations exist in the dataset, not a vacuous pass
