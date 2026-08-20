@@ -1,0 +1,8 @@
+pytest
+playwright==1.61.0
+
+# Pillow and psd-tools are NOT listed here: this app's .venv is created with
+# --system-site-packages from /opt/homebrew/bin/python3.14 specifically to inherit the real,
+# already-installed psd-tools 1.17.4 (and Pillow) from ~/Library/Python/3.14/, per
+# 03-plan.md's Summary. Re-installing them here would risk shadowing that real install with a
+# possibly different version.
